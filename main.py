@@ -1,4 +1,4 @@
-import struct
+import multiprocessing
 
 import cv2
 import torch
@@ -34,6 +34,21 @@ from tha3.util import torch_linear_to_srgb, resize_PIL_image, extract_PIL_image_
     extract_pytorch_image_from_PIL_image
 
 import collections
+
+# 引入模块
+# from ctypes import *
+import speech_recognition as sr  # 用16行Python代码实现实时语音识别,用于实时语音识别的主要程序
+# 一个计算量和体积都很小的嵌入式语音识别引擎
+# from pocketsphinx import LiveSpeech, AudioFile, get_model_path, get_data_path
+import wave  # 用于读取wav格式文件
+import pyaudio
+# import matplotlib.pyplot as plt  # 用于绘制波形图
+# import winsound as ws  # winsound 为python内置标准库，可以播放wav格式音频
+import contextlib
+import threading
+from threading import Thread  # Python3中多线程使用的是threading模块。
+import random
+import pypinyin
 
 
 def convert_linear_to_srgb(image: torch.Tensor) -> torch.Tensor:
@@ -78,112 +93,6 @@ def create_default_blender_data():
     data[RIGHT_EYE_BONE_QUAT] = [0.0, 0.0, 0.0, 1.0]
 
     return data
-
-
-class OSFClientProcess(Process):
-    def __init__(self):
-        super().__init__()
-        self.queue = Queue()
-        self.should_terminate = Value('b', False)
-        self.address = args.osf.split(':')[0]
-        self.port = int(args.osf.split(':')[1])
-        self.ifm_fps_number = Value('f', 0.0)
-        self.perf_time = 0
-
-    def run(self):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.socket.setblocking(False)
-        self.socket.bind(("", self.port))
-        self.socket.settimeout(0.1)
-        ifm_fps = FPS()
-        while True:
-            if self.should_terminate.value:
-                break
-            try:
-                socket_bytes = self.socket.recv(8192)
-            except socket.error as e:
-                err = e.args[0]
-                if err == errno.EAGAIN or err == errno.EWOULDBLOCK or err == 'timed out':
-                    continue
-                else:
-                    raise e
-
-            # socket_string = socket_bytes.decode("utf-8")
-            osf_raw = (struct.unpack('=di2f2fB1f4f3f3f68f136f210f14f', socket_bytes))
-            # print(osf_raw[432:])
-            data = {}
-            OpenSeeDataIndex = [
-                'time',
-                'id',
-                'cameraResolutionW',
-                'cameraResolutionH',
-                'rightEyeOpen',
-                'leftEyeOpen',
-                'got3DPoints',
-                'fit3DError',
-                'rawQuaternionX',
-                'rawQuaternionY',
-                'rawQuaternionZ',
-                'rawQuaternionW',
-                'rawEulerX',
-                'rawEulerY',
-                'rawEulerZ',
-                'translationY',
-                'translationX',
-                'translationZ',
-            ]
-            for i in range(len(OpenSeeDataIndex)):
-                data[OpenSeeDataIndex[i]] = osf_raw[i]
-            data['translationY'] *= -1
-            data['translationZ'] *= -1
-            data['rotationY'] = data['rawEulerY']-10
-            data['rotationX'] = (-data['rawEulerX'] + 360)%360-180
-            data['rotationZ'] = (data['rawEulerZ'] - 90)
-            OpenSeeFeatureIndex = [
-                'EyeLeft',
-                'EyeRight',
-                'EyebrowSteepnessLeft',
-                'EyebrowUpDownLeft',
-                'EyebrowQuirkLeft',
-                'EyebrowSteepnessRight',
-                'EyebrowUpDownRight',
-                'EyebrowQuirkRight',
-                'MouthCornerUpDownLeft',
-                'MouthCornerInOutLeft',
-                'MouthCornerUpDownRight',
-                'MouthCornerInOutRight',
-                'MouthOpen',
-                'MouthWide'
-            ]
-
-            for i in range(68):
-                data['confidence' + str(i)] = osf_raw[i + 18]
-            for i in range(68):
-                data['pointsX' + str(i)] = osf_raw[i * 2 + 18 + 68]
-                data['pointsY' + str(i)] = osf_raw[i * 2 + 18 + 68 + 1]
-            for i in range(70):
-                data['points3DX' + str(i)] = osf_raw[i * 3 + 18 + 68 + 68 * 2]
-                data['points3DY' + str(i)] = osf_raw[i * 3 + 18 + 68 + 68 * 2 + 1]
-                data['points3DZ' + str(i)] = osf_raw[i * 3 + 18 + 68 + 68 * 2 + 2]
-
-            for i in range(len(OpenSeeFeatureIndex)):
-                data[OpenSeeFeatureIndex[i]] = osf_raw[i + 432]
-            # print(data['rotationX'],data['rotationY'],data['rotationZ'])
-
-            a = np.array([
-                data['points3DX66'] - data['points3DX68'] + data['points3DX67'] - data['points3DX69'],
-                data['points3DY66'] - data['points3DY68'] + data['points3DY67'] - data['points3DY69'],
-                data['points3DZ66'] - data['points3DZ68'] + data['points3DZ67'] - data['points3DZ69']
-            ])
-            a = (a / np.linalg.norm(a))
-            data['eyeRotationX'] = a[0]
-            data['eyeRotationY'] = a[1]
-            try:
-                self.queue.put_nowait(data)
-            except queue.Full:
-                pass
-        self.queue.close()
-        self.socket.close()
 
 
 ifm_converter = tha2.poser.modes.mode_20_wx.IFacialMocapPoseConverter20()
@@ -313,7 +222,53 @@ class MouseClientProcess(Process):
                 mouse_data['x_angle'] += 0.05
             prev = mouse_data
             self.queue.put_nowait(mouse_data)
-            time.sleep(1 / 60)
+            time.sleep(1 / 60)  # 循环程序暂停1/60s
+
+
+class AIClientProcess(Process):  # leojnjn20221229 创建AIClientProcess对象
+    def __init__(self):
+        super().__init__()
+        self.queue = Queue()
+
+    def run(self):
+        mouse = Controller()
+        posLimit = [int(x) for x in args.AI_input.split(',')]
+        prev = {
+            'eye_l_h_temp': 0,
+            'eye_r_h_temp': 0,
+            'mouth_ratio': 0,
+            'eye_y_ratio': 0,
+            'eye_x_ratio': 0,
+            'x_angle': 0,
+            'y_angle': 0,
+            'z_angle': 0,
+        }
+        while True:
+            pos = mouse.position
+            # print(pos)
+            eye_limit = [0.8, 0.5]
+            head_eye_reduce = 0.6
+            head_slowness = 0.2
+            mouse_data = {
+                'eye_l_h_temp': 0,
+                'eye_r_h_temp': 0,
+                'mouth_ratio': 0,
+                'eye_y_ratio': np.interp(pos[1], [posLimit[1], posLimit[3]], [1, -1]) * eye_limit[1],
+                'eye_x_ratio': np.interp(pos[0], [posLimit[0], posLimit[2]], [1, -1]) * eye_limit[0],
+                'x_angle': np.interp(pos[1], [posLimit[1], posLimit[3]], [1, -1]),
+                'y_angle': np.interp(pos[0], [posLimit[0], posLimit[2]], [1, -1]),
+                'z_angle': 0,
+            }
+            mouse_data['x_angle'] = np.interp(head_slowness, [0, 1], [prev['x_angle'], mouse_data['x_angle']])
+            mouse_data['y_angle'] = np.interp(head_slowness, [0, 1], [prev['y_angle'], mouse_data['y_angle']])
+            mouse_data['eye_y_ratio'] -= mouse_data['x_angle'] * eye_limit[1] * head_eye_reduce
+            mouse_data['eye_x_ratio'] -= mouse_data['y_angle'] * eye_limit[0] * head_eye_reduce
+            if args.bongo:
+                mouse_data['y_angle'] += 0.05
+                mouse_data['x_angle'] += 0.05
+            prev = mouse_data
+            self.queue.put_nowait(mouse_data)
+            time.sleep(1 / 60)  # 循环程序暂停1/60s
 
 
 class ModelClientProcess(Process):
@@ -523,6 +478,531 @@ class ModelClientProcess(Process):
                 self.cache_hit_ratio.value = hit / tot
 
 
+# if len(phrase_queue) < 3:
+#     phrase_queue.append(audio1)
+#     phrase_queue.append(audio1)
+#     phrase_queue.append(audio1)
+# else:
+#     phrase_queue.pop(0)
+#     phrase_queue.append(audio1)
+# 进程方式Process
+# ret_volume_queue = multiprocessing.Array('d', range(0), lock=True)
+# ret_phrase_queue = multiprocessing.Array('c', [1], lock=True)
+# mouth_cues_index = multiprocessing.Value('i', 0, lock=True)
+# frame = multiprocessing.Value('i', 0, lock=True)
+# volume = multiprocessing.Value('d', 0.0, lock=True)
+# np_volume = multiprocessing.Value('d', 0.0, lock=True)
+# 线程方式Thread
+ret_volume_queue = []  # 使用全局变量的队列，来保存返回值
+ret_phrase_queue = ['']
+mouth_cues_index = 0  # 嘴型下标
+frame = 0
+volume = 0.0
+np_volume = 0.0
+
+
+class Wav2MouthThread(Thread):  # class Wav2MouthProcess(Process):  #
+    def __init__(self):
+        # super().__init__()    #进程方式
+        Thread.__init__(self)  # 必须步骤
+
+    def run(self):
+        """leojnjn20221206^
+        本地音频文件路径
+        """
+        # here!!!
+        # waves_path = rf"data/waves/"  # rf"data/waves/{argsWave}.wav"
+        # wave_name = os.listdir(waves_path)  # 得到waves_path文件夹下的所有文件名称
+        # wave_path = waves_path + wave_name[5]  # 得到文件夹下音源路径 0 1 2 -> 14 3-> 22 4->98 5->99
+        wave_path = rf"data/waves/{args.wave}.wav"
+
+        # lips_path = rf"data/lips/"
+        # lip_name = os.listdir(lips_path)  # 得到lips_path文件夹下的所有文件名称
+        # lip_path = lips_path + lip_name[5]  # 得到文件夹下口型json文件路径 0 1 2 -> 14 3-> 22 4->98 5->99
+        lip_path = rf"data/lips/{args.lip}.json"
+
+        with open(lip_path, encoding='utf-8') as f:
+            data = json.load(f)
+        print("lip json Loaded:", args.lip)
+        # 计算音频时间
+        waveDuration = get_duration_wav(wave_path)
+        print(waveDuration)
+        duration = data['metadata']['duration']
+        print(duration)
+        print("-" * 30)
+        mouth_cues = data['mouthCues']
+
+        # print("先开始语音到口型计算")
+        # # 计算音频时间
+        # waveDuration = get_duration_wav(wave_path)
+        # print(waveDuration)
+        # print("-" * 30)
+        # """leojnjn
+        # speech_recognition 使用 record()从文件中获取数据,用于实时语音识别的主要程序
+        # """
+        # recognizer = sr.Recognizer()
+        # audio_file = sr.AudioFile(wave_path)
+        # # count_time = 0.0
+        # # time_gap = 0.5  # 秒0.5s
+        # with audio_file as source:
+        #     '''默认将文件流的第1秒识别为音频的噪声级别,默认为 1，现将此值下降到 0.1'''
+        #     recognizer.adjust_for_ambient_noise(source, duration=0.1)
+        #     audio1 = recognizer.record(source, duration=waveDuration)
+        #     try:
+        #         tik = time.time()
+        #         '''Sphinx 不联网，速度快 2.711914300918579s'''
+        #         sphinx_text1 = recognizer.recognize_sphinx(audio1, language="zh-CN")  # , language="en-US")  #
+        #         # google_text1 = recognizer.recognize_google(audio1, language="cmn-Hans-CN",
+        #         #                                            show_all=False)  # , language="en-US")
+        #         # ['o', 'u', 'o', 'a', 'e', 'a', 'u', 'e', 'a', 'i', 'e', 'o', 'o', 'i', 'o', 'o', 'e', 'i', 'e']
+        #         # vowels = get_vowels(sphinx_text1)  # 英文生搬
+        #         vowels = get_vowels_cn(sphinx_text1)  # 拼音准确
+        #         tok = time.time()
+        #         print(str(tok - tik) + 's')
+        #         print("text1 sphinx : {}".format(sphinx_text1))
+        #         # print("text1 google : {}".format(google_text1))
+        #         # print("pinyin list : {}".format(list_pinyin))
+        #         print("vowels: {}".format(vowels))
+        #     except sr.UnknownValueError:
+        #         print("sphinx could not understand audio")
+        #     except sr.RequestError as e:
+        #         print("sphinx error; {0}".format(e))
+        #     except:
+        #         print("Sorry sphinx can't record wave!")
+
+        print("等待20s启图像后")
+        time.sleep(20)  # 20用time.sleep模拟任务耗时
+        print("开始声音到张嘴o")
+        """leojnjn
+        读取本地音频波形数据,打开wave文件 file_name[0] = 'lex_000'  words: '您可以制定新的科研方向了司令官'"""
+        waveFile = wave.open(wave_path, 'rb')
+        print("Wave Audio Loaded:", args.wave)
+        # 获取音频的属性参数： nchannels声道数 sampwidth采样大小 framerate帧率 nframes总帧数
+        params = waveFile.getparams()
+        # 列表：单独提取出各参数的值，并加以定义：
+        nchannels, sampwidth, framerate, nframes = params[:4]  # (1, 2, 22050, 89344) #(2, 2, 44100, 5998592)
+        print(params[:4])
+        waveStr = waveFile.readframes(params[3])  # 读取帧数据params[3]:nframes
+        meta = {"seek": 0}  # int变量不能传进函数内部，会有UnboundLocalError，所以给它套上一层壳
+        # 读取单通道音频 并绘制波形图（常见音频为左右两个声道）
+        # 将字符串转换为16位整数
+        waveData = np.frombuffer(waveStr, dtype=np.int16)
+        # 归一化：把数据变成（０，１）之间的小数。主要是为了数据处理方便提出来的，把数据映射到0～1范围之内处理，更加便捷快速
+        waveData = waveData * 1.0 / (max(abs(waveData)))
+
+        # 要动态生成音频数据或立即处理录制的音频数据，请使用下面概述的回调模式
+        # 当需要在执行其他程序时同时播放音频，可以使用回调的方式播放，示例代码如下：每time.sleep(秒)调用
+        def callback(in_data, frame_count, time_info, status):
+            global frame
+            global mouth_cues_index
+            global volume
+            global np_volume
+            vowel = ''  # 元音为何 'a' 'i' 'u' 'e' 'o'
+
+            t = frame / params[2]  # 帧数据params[2]:framerate
+            # print(f"current time: {t}")
+            '''音量部分：写在这太快太抖了'''
+            # if frame < params[3]:  # params[3]:nframes
+            #     volume = round(float(abs(waveData[frame])) * 2, 2)  # 使用round内置函数保留2位小数
+            #     volume = min(volume, 1.0)  # 限制volume不能超过1
+            #     # 张嘴程度0-1
+            #     if len(ret_volume_queue) < 3:  # 无长度
+            #         ret_volume_queue.append(volume)
+            #         ret_volume_queue.append(volume)
+            #         ret_volume_queue.append(volume)
+            #     else:  # 1长度
+            #         ret_volume_queue.pop(0)
+            #         ret_volume_queue.append(volume)
+
+            while mouth_cues_index < len(mouth_cues):
+                if t < mouth_cues[mouth_cues_index]['start']:
+                    break
+
+                # 如果逻辑走到这里，说明要刷新口型了
+                index = mouth_cues_index
+                # print(mouth_cues[index]['start'])
+
+                '''音量渐变：'''
+                t_start = mouth_cues[index]['start']
+                t_end = mouth_cues[index]['end']
+                t_mid = t_start + (t_end - t_start) / 2.0
+                k = 1.0 / (t_end - t_start)
+
+                mouth_shape = mouth_cues[index]['value']
+                # print(f"mouth shape: {mouth_shape}")
+                '''口型部分：'''
+                if "A" == mouth_shape:
+                    volume = 0.0  # 限制volume不能超过1
+                    np_volume = volume
+                else:
+                    # volume = 1.0  # 限制volume不能超过1
+                    if t >= t_start and t < t_mid:
+                        volume = 0.5 + k * (t - t_start)  # 音量渐变
+                    elif t >= t_mid and t <= t_end:
+                        volume = 1.0 - k * (t - t_mid)  # 音量渐变
+                    if "B" == mouth_shape:
+                        # volume = 0.5 # 半个正常'e'口型
+                        if t >= t_start and t < t_mid:
+                            volume = (0.5 + k * (t - t_start)) / 2.0  # 音量渐变
+                        elif t >= t_mid and t <= t_end:
+                            volume = (1.0 - k * (t - t_mid)) / 2.0  # 音量渐变
+                        vowel = 'e'
+                    elif "C" == mouth_shape:
+                        vowel = 'e'
+                    elif "D" == mouth_shape:
+                        vowel = 'a'
+                    elif "E" == mouth_shape:
+                        vowel = 'o'
+                    elif "F" == mouth_shape:
+                        vowel = 'u'
+
+                    if len(ret_volume_queue) < 3:  # 无长度
+                        ret_volume_queue.append(volume)
+                        ret_volume_queue.append(volume)
+                        ret_volume_queue.append(volume)
+                    else:  # 1长度
+                        ret_volume_queue.pop(0)
+                        ret_volume_queue.append(volume)
+                    np_volume = round(np.average(np.array(ret_volume_queue), axis=0, weights=[0.04, 0.16, 0.8]), 2)
+                    print(f"ret volume queue: {ret_volume_queue[0]},{ret_volume_queue[1]},{ret_volume_queue[2]}")
+                    print(f"np volume: {np_volume}")
+                # if "A" != mouth_shape and 0 == volume:
+                #     print("*")
+                if len(ret_phrase_queue) < 1:  # 无长度
+                    ret_phrase_queue.append(vowel)
+                else:  # 1长度
+                    ret_phrase_queue.pop(0)
+                    ret_phrase_queue.append(vowel)
+
+                next_index = index
+                while t >= mouth_cues[next_index]['start']:
+                    next_index += 1
+                    if next_index >= len(mouth_cues):
+                        break
+
+                index = next_index - 1
+                # print(f"current index: {index}")
+                # 这里得到mouth_shape，用于口型表现
+                # mouth_shape = mouth_cues[index]['value']
+                # # print(f"mouth shape: {mouth_shape}")
+
+                mouth_cues_index = next_index
+
+            frame += frame_count
+
+            # 这是针对流式录制，只有二进制数据没有保存到本地的wav文件时的做法，通过文件指针偏移读取数据
+            start = meta["seek"]
+            meta["seek"] += frame_count * pyaudio.get_sample_size(pyaudio.paInt16) * waveFile.getnchannels()
+            data = waveStr[start: meta["seek"]]
+            # 如果有保存成wav文件，直接用文件句柄readframes就行，不用像上面那么麻烦
+            # data = waveFile.readframes(frame_count)
+            return (data, pyaudio.paContinue)
+
+        pa = pyaudio.PyAudio()
+        # 要录制或播放音频，请使用pa.open把音频转化为音频流：上面定义的各个参数，在这里都用上了。
+        stream = pa.open(format=pa.get_format_from_width(sampwidth),  # waveFile.getsampwidth()
+                         channels=nchannels,  # waveFile.getnchannels()
+                         rate=framerate,  # waveFile.getframerate()
+                         output=True,
+                         stream_callback=callback)  # “回调模式”
+
+        # index = 0
+        # count = 0
+        # volume = 0
+        i_frame = 0
+        stream.start_stream()  # read data 使用 pyaudio.Stream.start_stream() 播放/录制音频流
+        tic_time = stream.get_time()
+        while stream.is_active():  # 直到播放完is_active为False
+            # count += 1
+            sleep_time = 0.2  # 0.093  # 0.1会有细碎增长 0.2会显得卡
+            toc_time = stream.get_time()
+            dlt_time = toc_time - tic_time  # 每次会多算的一丢丢点时间
+            # print(f'δ流时间：{dlt_time}')
+            '''音量部分：写在这还行'''
+            if i_frame < nframes:
+                volume = round(float(abs(waveData[i_frame])) * 2, 2)  # 使用round内置函数保留2位小数
+                i_frame = int(framerate * dlt_time)  # / ratio)  # 4410 # 2205
+                volume = min(volume, 1.0)  # 限制volume不能超过1
+                if len(ret_volume_queue) < 3:  # 无长度
+                    ret_volume_queue.append(volume)
+                    ret_volume_queue.append(volume)
+                    ret_volume_queue.append(volume)
+                else:  # 1长度
+                    ret_volume_queue.pop(0)
+                    ret_volume_queue.append(volume)
+                if 0.0 == volume:
+                    np_volume = volume
+                    # np_volume = np.average(np.array(ret_volume_queue), axis=0, weights=[0.1, 0.3, 0.6])
+                # elif volume < 0.1:  # 默认快张不开嘴用a
+                #     ret_phrase_queue[0] = 'a'
+                # print(ret_volume_queue[0])  # 打印音量
+
+            #     '''在启用sphinx识别的情况下使用：音量大于0.1且按1秒5元音概算且未超出元音串范围'''
+            #     # if ret_volume_queue[0] >= 0.1 and 0 == count % 2 and index < vowels.__len__():  # i_frame % 4410 == 0
+            #     #     if len(ret_phrase_queue) < 1:  # 无长度
+            #     #         ret_phrase_queue.append(vowels[index])
+            #     #     else:  # 1长度
+            #     #         ret_phrase_queue.pop(0)
+            #     #         ret_phrase_queue.append(vowels[index])
+            #     #         index += 1
+            #     # else:  # 默认快张不开嘴用a
+            #     #     ret_phrase_queue[0] = 'a'
+            # print("waiting...")
+            time.sleep(sleep_time)  # 0.1
+            # print(stream.get_read_available())  # -9977
+            # print(stream.get_time())  # 14044.578681822213
+        ret_phrase_queue[0] = ''
+        ret_volume_queue[0] = 0  # 直到播放完is_active为False,一定得闭嘴
+        stream.stop_stream()  # 使用 pyaudio.Stream.stop_stream() 暂停播放/录制
+        stream.close()  # 并 pyaudio.Stream.close() 终止流
+        waveFile.close()
+        pa.terminate()  # 最后，使用 pyaudio.PyAudio.terminate() 终止portaudio会话,关闭播放器
+
+        # # 读取单通道音频 并绘制波形图（常见音频为左右两个声道）
+        # # 按照帧数大小的块,读取音频数据：得到一系列二进制编码。
+        # waveStr = waveFile.readframes(nframes)
+        # # 将字符串转换为16位整数
+        # waveData = np.frombuffer(waveStr, dtype=np.int16)
+        # # 归一化：把数据变成（０，１）之间的小数。主要是为了数据处理方便提出来的，把数据映射到0～1范围之内处理，更加便捷快速
+        # waveData = waveData * 1.0 / (max(abs(waveData)))
+        # i_frame = 0
+        # while True:
+        #     if i_frame < nframes:
+        #         volume = int(abs(waveData[i_frame]) * 100)  # 放大取整
+        #         print(volume)
+        #         i_frame += 2205  # 22050
+        #     else:
+        #         break
+        # i_frame = 0
+        # while True:
+        #     if i_frame < nframes:
+        #         volume = int(abs(waveData[i_frame]) * 100)  # 放大取整
+        #         print(volume)
+        #         i_frame += 2205  # 22050
+        #     else:
+        #         break
+        # 计算音频时间并绘制
+        # waveTime = np.arange(0, nframes) * (1.0 / framerate)  # <class 'numpy.ndarray'>
+        # # print(waveTime[2])
+        # plt.plot(waveTime, waveData)
+        # plt.xlabel("Time(s)")
+        # plt.ylabel("Amplitude")
+        # plt.title("Single channel wavedata")
+        # plt.show()
+        testTime = float(nframes / framerate)
+        print(testTime)
+        print("结束声音到闭嘴-")
+
+
+class Aud2MouthThread(Thread):
+    def __init__(self):
+        Thread.__init__(self)  # 必须步骤
+
+    def run(self):
+        # print("等待20s先启图像")
+        # time.sleep(20)  # 用time.sleep模拟任务耗时
+        print("先开始语音到口型")
+        """leojnjn20221206^
+        本地音频文件路径
+        """
+        docs_path = rf"data/waves/"  # rf"data/waves/{argsWave}.wav"
+        file_name = os.listdir(docs_path)  # 得到文件夹下的所有文件名称
+        file_path = docs_path + file_name[0]  # 得到文件夹下音源路径
+        # 计算音频时间
+        waveDuration = get_duration_wav(file_path)
+        print(waveDuration)
+        print("-" * 30)
+        """leojnjn
+        speech_recognition 使用 record()从文件中获取数据,用于实时语音识别的主要程序
+        """
+        recognizer = sr.Recognizer()
+        audio_file = sr.AudioFile(file_path)
+        # count_time = 0.0
+        # time_gap = 0.5  # 秒0.5s
+        with audio_file as source:
+            '''默认将文件流的第1秒识别为音频的噪声级别,默认为 1，现将此值下降到 0.1'''
+            recognizer.adjust_for_ambient_noise(source, duration=0.1)
+            audio1 = recognizer.record(source, duration=waveDuration)
+            try:
+                tik = time.time()
+                '''Sphinx 不联网，速度快 2.711914300918579s'''
+                sphinx_text1 = recognizer.recognize_sphinx(audio1, language="en-US")  # , language="zh-CN")  #
+                vowels = get_vowels(sphinx_text1)
+                tok = time.time()
+                print(str(tok - tik) + 's')
+                print("text1 sphinx : {}".format(sphinx_text1))
+                print("vowels sphinx : {}".format(vowels))
+            except sr.UnknownValueError:
+                print("sphinx could not understand audio")
+            except sr.RequestError as e:
+                print("sphinx error; {0}".format(e))
+            except:
+                print("Sorry sphinx can't record wave!")
+        while True:
+            if vowels is not None:
+                if len(ret_phrase_queue) < 1:  # 无长度
+                    ret_phrase_queue.append(vowels[0])
+                else:  # 1长度
+                    ret_phrase_queue.pop(0)
+                    ret_phrase_queue.append(vowels[0])
+
+            # ws.PlaySound(file_path, flags=1)  # winsound可以播放wav格式音频。
+            '''0.5秒循环的不要了'''
+            # while True:  # waveTime
+            #     if count_time < waveDuration:
+            #         count_time += time_gap
+            #         audio1 = recognizer.record(source, duration=time_gap)
+            #         # audio1 = recognizer.record(source, duration=4)
+            #         # audio2 = recognizer.record(source, offset=2, duration=2)
+            #         # print(type(audio1))
+            #         try:
+            #             tik = time.time()
+            #             '''Sphinx 不联网，速度快 2.711914300918579s'''
+            #             sphinx_text1 = recognizer.recognize_sphinx(audio1, language="en-US")  # , language="zh-CN")  #
+            #             vowels = get_vowels(sphinx_text1)
+            #             tok = time.time()
+            #             print(str(tok - tik) + 's')
+            #             print("text1 sphinx : {}".format(sphinx_text1))
+            #             print("vowels sphinx : {}".format(vowels))
+            #         except sr.UnknownValueError:
+            #             print("sphinx could not understand audio")
+            #         except sr.RequestError as e:
+            #             print("sphinx error; {0}".format(e))
+            #         except:
+            #             print("Sorry sphinx can't record wave!")
+            #         if vowels is not None:
+            #             if len(ret_phrase_queue) < 1:  # 无长度
+            #                 ret_phrase_queue.append(vowels[0])
+            #             else:  # 1长度
+            #                 ret_phrase_queue.pop(0)
+            #                 ret_phrase_queue.append(vowels[0])
+            #     else:
+            #         break
+            # time.sleep(1 / 60)  # 循环程序暂停1/60s
+
+            # try:
+            #     tik = time.time()
+            #     '''Google Web Speech API 需联网，可选不同的语言识别，速度慢 13.3916015625s
+            #     返回了一个关键字为 'alternative' 的列表，指的是全部可能的响应列表'''
+            #     google_text1 = recognizer.recognize_google(audio1, language="cmn-Hans-CN",
+            #                                                show_all=True)  # , language="en-US")
+            #     tok = time.time()
+            #     print(str(tok - tik) + 's')
+            #     print("text2 google : {}".format(google_text1))
+            # except sr.UnknownValueError:
+            #     print("google could not understand audio")
+            # except sr.RequestError as e:
+            #     print("google error; {0}".format(e))
+            # except:
+            #     print("Sorry google can't record wave!")
+            # """leojnjn
+            # speech_recognition 用16行Python代码实现实时语音识别,用于实时语音识别的主要程序
+            # """
+            # listAbleMic = sr.Microphone.list_microphone_names()
+            # '''mic = sr.Microphone(device_index=0)但大多数状况下须要使用系统默认麦克风'''
+            # mic = sr.Microphone()  # 建立一个Microphone类的实例mic
+            # print(listAbleMic)
+            # while True:
+            #     with mic as source:
+            #         recognizer.adjust_for_ambient_noise(source, duration=0.2)
+            #         print("Say something please !")
+            #         audio_mic = recognizer.listen(source)
+            #
+            #         try:
+            #             text = recognizer.recognize_sphinx(audio_mic, language="zh-CN")  # , language="en-US")
+            #             '''Google Web Speech API需联网，可选不同的语言识别，速度慢'''
+            #             # text = recognizer.recognize_google(audio)
+            #             print("You said : {}".format(text))
+            #         except:
+            #             print("Sorry I can't hear you!")
+
+            """leojnjn
+            pocketsphinx 一个计算量和体积都很小的嵌入式语音识别引擎
+            """
+            # model_path = get_model_path()
+            # print(model_path)
+            # data_path = get_data_path()
+            # print(data_path)
+            # '''
+            # 支持的文件格式:wav
+            # 音频文件的解码要求: 16KHz, 单声道
+            # '''
+            # config = {
+            #     'verbose': False,
+            #     'audio_file': './data/waves/lex_000.wav',
+            #     'buffer_size': 2048,
+            #     'no_search': False,
+            #     'full_utt': False,
+            #     # 'hmm': os.path.join(model_path, 'zh_cn.cd_cont_5000'),  # 计算模型
+            #     # 'lm': os.path.join(model_path, 'zh_cn.lm.bin'),  # 语言模型
+            #     # 'dic': os.path.join(model_path, 'zh_cn.dic')  # 词典模型
+            #     'hmm': os.path.join(model_path, 'en-us'),  # 计算模型
+            #     'lm': os.path.join(model_path, 'en-us.lm.bin'),  # 语言模型
+            #     'dict': os.path.join(model_path, 'cmudict-en-us.dict')  # 词典模型
+            # }
+            # audio = AudioFile(**config)
+            # for phrase in audio:
+            #     print("phrase:", phrase)
+            #     print(phrase.segments(detailed=True))
+
+            # # 实时录音效果比recognizer.recognize_google(audio)差
+            # speech = LiveSpeech(
+            #     verbose=False,
+            #     sampling_rate=16000,
+            #     buffer_size=2048,
+            #     no_search=False,
+            #     full_utt=False,
+            #     # hmm=os.path.join(model_path, 'zh_cn.cd_cont_5000'),
+            #     # lm=os.path.join(model_path, 'zh_cn.lm.bin'),
+            #     # dic=os.path.join(model_path, 'zh_cn.dic')
+            #     hmm=os.path.join(model_path, 'en-us'),
+            #     lm=os.path.join(model_path, 'en-us.lm.bin'),
+            #     dic=os.path.join(model_path, 'cmudict-en-us.dict')
+            # )
+            # for phrase in speech:
+            #     print("phrase:", phrase)
+            #     print(phrase.segments(detailed=True))
+        print("-" * 30)
+
+
+def get_duration_wav(file_path):
+    """leojnjn
+    contextlib获取wav音频文件时长
+    :param file_path:
+    :return:
+    """
+    with contextlib.closing(wave.open(file_path, 'r')) as f:
+        frames = f.getnframes()
+        rate = f.getframerate()
+        duration = frames / float(rate)
+    return duration
+
+
+def get_vowels(String):
+    """leojnjn
+    该片段将在字符串中找到元音“a e i o u”
+    :param String:
+    :return:
+    """
+    return [each for each in String if each in "aeiou"]
+
+
+def get_vowels_cn(String):
+    """leojnjn
+    该片段将在中文拼音列表中找到元音“a e i o u”
+    :param String:
+    :return:
+    """
+    # string = ''
+    # # each = []
+    # for index in range(len(List)):
+    #     string.join(List[index])
+    list_pinyin = pypinyin.lazy_pinyin(String)
+    str1 = ''.join(list_pinyin)  # 使用 str.join() 方法返回整串
+    print(str1)
+    return [each for each in str1 if each in "aeiou"]
+
+
 @torch.no_grad()
 def main():
     img = Image.open(f"data/images/{args.character}.png")
@@ -556,19 +1036,22 @@ def main():
             client_process = IFMClientProcess()
             client_process.daemon = True
             client_process.start()
-            print("iFacialMocap Service Running:", args.ifm)
+            print("IFM Service Running:", args.ifm)
 
-        elif args.osf is not None:
-            client_process = OSFClientProcess()
-            client_process.daemon = True
-            client_process.start()
-            print("OpenSeeFace Service Running:", args.osf)
-
-        elif args.mouse_input is not None:
+        if args.mouse_input is not None:
             client_process = MouseClientProcess()
             client_process.daemon = True
             client_process.start()
             print("Mouse Input Running")
+
+        """leojnjn20221229
+        # 创建AIClientProcess对象
+        """
+        if args.AI_input is not None:
+            client_process = AIClientProcess()
+            client_process.daemon = True
+            client_process.start()
+            print("AI Input Running")
 
         else:
 
@@ -620,13 +1103,9 @@ def main():
         print("Anime4K Loaded")
 
     position_vector = [0, 0, 0, 1]
-    position_vector_0 = None
-    pose_vector_0 = None
 
     pose_queue = []
-    blender_data={}
-    if(args.ifm):
-        blender_data = create_default_blender_data()
+    blender_data = create_default_blender_data()
     mouse_data = {
         'eye_l_h_temp': 0,
         'eye_r_h_temp': 0,
@@ -645,11 +1124,104 @@ def main():
 
     print("Ready. Close this console to exit.")
 
+    """leojnjn20221201
+    mouthStatusLeo 嘴部状态 0 关闭 1 打开
+    mouthShapeLeo嘴部形状14a 15i 16u 17e 18o 19△
+    eyeStatusLeo = 0 左眼开 eyeStatusReo = 0 右眼开
+    timer 随机眨眼计时器"""
+    mouthStatusLeo = 0
+    mouthShapeLeo = 14
+    eyeStatusLeo, eyeStatusReo = 0, 0
+    tic_rands = 0.0
+    dlt_rands = 0.0
+
+    """leojnjn20221208+
+    # 创建声音到嘴型线程对象
+    """
+    threads = [Wav2MouthThread() for i in range(1)]  # , Aud2MouthThread()]  #
+    for t in threads:
+        lock = threading.Lock()  # 在线程同步执行获取数据的过程中，容易造成数据不同步现象，这时候可以给资源加锁
+        lock.acquire()
+        t.start()  # 启动
+        lock.release()
+    """leojnjn20221208+
+    # 创建声音到嘴型子进程对象
+    """
+    # wav2mouth_process = Wav2MouthProcess()
+    # wav2mouth_process.daemon = True
+    # wav2mouth_process.start()
+
     while True:
+        """leojnjn20221206
+        # 线程实时调整嘴形 赋值mouse和webcam中的变量改变影响2者功能呈现
+        mouthStatusLeo 嘴部状态 0 关闭 1 打开
+        mouthShapeLeo嘴部形状14a 15i 16u 17e 18o 19△
+        """
+        mouthStatusLeo = np_volume  # ret_volume_queue[0]
+        # mouthShapeLeo = ret_phrase_queue[0]
+        if "a" == ret_phrase_queue[0]:
+            # print("aaa")
+            mouthShapeLeo = 14
+        elif "e" == ret_phrase_queue[0]:
+            # print("eee")
+            mouthShapeLeo = 17
+        elif "i" == ret_phrase_queue[0]:
+            # print("ooo")
+            mouthShapeLeo = 15
+        elif "o" == ret_phrase_queue[0]:
+            # print("uuu")
+            mouthShapeLeo = 18
+        elif "u" == ret_phrase_queue[0]:
+            # print("iii")
+            mouthShapeLeo = 16
+        else:
+            # print("!!!")
+            mouthShapeLeo = 19
+        # print(ret_phrase_queue[0])
+
+        """★leojnjn 随机眨眼的计时器部分 s 赋值mouse中的变量改变只影响mouse功能呈现
+        time.perf_counter()是已经持续的时间 (math.pi / 2.0 - 0.1)         # math.sin(time.perf_counter() * 2)"""
+        lower_case = int((math.pi / 2.0 - 0.05) * 1000)
+        # print(int((math.pi / 2.0 + 0.1) * 1000))
+        tic_rands = int(time.perf_counter() * 1000)
+        # print(tic_rands)
+        interval_milseconds = random.randint(0, 100)  # 1~60秒随机选一个时间
+        if (tic_rands % lower_case) < interval_milseconds:
+            if math.sin(time.perf_counter()) > 0:
+                eyeStatusReo, eyeStatusLeo = math.sin(time.perf_counter()), math.sin(time.perf_counter())
+        else:
+            eyeStatusReo, eyeStatusLeo = 0, 0  # 睁眼
+        # print(eyeStatusReo)
+
+        """★leojnjn 键盘监听
+        需要注意的是必须使用cv加载图像，只有点击图像窗口才能侦听点击窗口时所使用的按键
+        ord和chr的用法我这里重复一下，可以实现对于acall码的解释，方便直接看到按键结果
+        ord()函数主要用来返回对应字符的ascii码，
+        chr()主要用来表示ascii码对应的字符，可以用十进制，也可以用十六进制。
+        说白了就是对键盘事件进行delay(50ms==0.05s)的等待（delay=0则为无限等待），若触发则返回该按键的ASSIC码（否则返回-1）
+        """
+        # k = cv2.waitKey(50)  # & 0xFF
+        # # print(k)
+        # if -1 == k:
+        #     # print("^_^")
+        #     eyeStatusReo, eyeStatusLeo = 0, 0
+        # else:  # k != -1
+        #     # print("^_^")
+        #     if ord("t") == k:
+        #         # print("-_-")
+        #         eyeStatusReo, eyeStatusLeo = 1, 1
+        #     else:
+        #         if ord("r") == k:
+        #             # print("-_^")
+        #             eyeStatusReo = 1
+        #         if ord("y") == k:
+        #             # print("^_-")
+        #             eyeStatusLeo = 1
+        '''------------------------------------------------------------------------------------'''
+
         # ret, frame = cap.read()
         # input_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # results = facemesh.process(input_frame)
-
         if args.perf == 'main':
             tic = time.perf_counter()
         if args.debug_input:
@@ -669,56 +1241,7 @@ def main():
             pose_vector_c[1] = math.sin(time.perf_counter() * 1.2)
             pose_vector_c[2] = math.sin(time.perf_counter() * 1.5)
 
-            eyebrow_vector_c[6]=math.sin(time.perf_counter() * 1.1)
-            eyebrow_vector_c[7]=math.sin(time.perf_counter() * 1.1)
 
-        elif args.osf is not None:
-            try:
-                new_blender_data = blender_data
-                while not client_process.should_terminate.value and not client_process.queue.empty():
-                    new_blender_data = client_process.queue.get_nowait()
-                blender_data = new_blender_data
-            except queue.Empty:
-                pass
-            eyebrow_vector_c = [0.0] * 12
-            mouth_eye_vector_c = [0.0] * 27
-            pose_vector_c = [0.0] * 6
-
-            if len(blender_data)!=0:
-                mouth_eye_vector_c[2] = 1-blender_data['leftEyeOpen']
-                mouth_eye_vector_c[3] = 1-blender_data['rightEyeOpen']
-
-                mouth_eye_vector_c[14] = max(blender_data['MouthOpen'],0)
-                # print(mouth_eye_vector_c[14])
-
-                mouth_eye_vector_c[25] = -blender_data['eyeRotationY']*3-(blender_data['rotationX'])/57.3*1.5
-                mouth_eye_vector_c[26] = blender_data['eyeRotationX']*3+(blender_data['rotationY'])/57.3
-                # print(mouth_eye_vector_c[25:27])
-                eyebrow_vector_c[6]=blender_data['EyebrowUpDownLeft']
-                eyebrow_vector_c[7]=blender_data['EyebrowUpDownRight']
-                # print(blender_data['EyebrowUpDownLeft'],blender_data['EyebrowUpDownRight'])
-
-                # if pose_vector_0==None:
-                #     pose_vector_0=[0,0,0]
-                #     pose_vector_0[0] = blender_data['rotationX']
-                #     pose_vector_0[1] = blender_data['rotationY']
-                #     pose_vector_0[2] = blender_data['rotationZ']
-                # pose_vector_c[0] = (blender_data['rotationX']-pose_vector_0[0])/57.3*3
-                # pose_vector_c[1] = -(blender_data['rotationY']-pose_vector_0[1])/57.3*3
-                # pose_vector_c[2] = (blender_data['rotationZ']-pose_vector_0[2])/57.3
-                pose_vector_c[0] = (blender_data['rotationX'])/57.3*3
-                pose_vector_c[1] = -(blender_data['rotationY'])/57.3*3
-                pose_vector_c[2] = (blender_data['rotationZ'])/57.3*2
-                # print(pose_vector_c)
-
-                if position_vector_0==None:
-                    position_vector_0=[0,0,0,1]
-                    position_vector_0[0] = blender_data['translationX']
-                    position_vector_0[1] = blender_data['translationY']
-                    position_vector_0[2] = blender_data['translationZ']
-                position_vector[0] = -(blender_data['translationX']-position_vector_0[0])*0.1
-                position_vector[1] = -(blender_data['translationY']-position_vector_0[1])*0.1
-                position_vector[2] = -(blender_data['translationZ']-position_vector_0[2])*0.1
 
         elif args.ifm is not None:
             # get pose from ifm
@@ -764,7 +1287,6 @@ def main():
             position_vector = blender_data[HEAD_BONE_QUAT]
 
         elif args.mouse_input is not None:
-
             try:
                 new_blender_data = mouse_data
                 while not client_process.queue.empty():
@@ -789,7 +1311,7 @@ def main():
             mouth_eye_vector_c[2] = eye_l_h_temp
             mouth_eye_vector_c[3] = eye_r_h_temp
 
-            mouth_eye_vector_c[14] = mouth_ratio * 1.5
+            mouth_eye_vector_c[14] = mouth_ratio * 1.5  # 1.5  # 14 #★a 15i 16u 17e 18o 19△d mouthShapeLeo
 
             mouth_eye_vector_c[25] = eye_y_ratio
             mouth_eye_vector_c[26] = eye_x_ratio
@@ -798,7 +1320,41 @@ def main():
             pose_vector_c[1] = y_angle
             pose_vector_c[2] = z_angle
 
-        else:
+        elif args.AI_input is not None:
+            try:
+                new_blender_data = mouse_data
+                while not client_process.queue.empty():
+                    new_blender_data = client_process.queue.get_nowait()
+                mouse_data = new_blender_data
+            except queue.Empty:
+                pass
+
+            eye_l_h_temp = eyeStatusLeo  # mouse_data['eye_l_h_temp']# ★ 眼部状态 0 打开 1 关闭
+            eye_r_h_temp = eyeStatusReo  # mouse_data['eye_r_h_temp']# ★ 眼部状态 0 打开 1 关闭
+            mouth_ratio = mouthStatusLeo  # mouse_data['mouth_ratio']# ★ 嘴部状态 0 关闭 1 打开张嘴与否
+            eye_y_ratio = mouse_data['eye_y_ratio']
+            eye_x_ratio = mouse_data['eye_x_ratio']
+            x_angle = mouse_data['x_angle']
+            y_angle = mouse_data['y_angle']
+            z_angle = mouse_data['z_angle']
+
+            eyebrow_vector_c = [0.0] * 12
+            mouth_eye_vector_c = [0.0] * 27
+            pose_vector_c = [0.0] * 6
+
+            mouth_eye_vector_c[2] = eye_l_h_temp
+            mouth_eye_vector_c[3] = eye_r_h_temp
+
+            mouth_eye_vector_c[mouthShapeLeo] = mouth_ratio * 1.5  # 1.5  # 14 #★a 15i 16u 17e 18o 19△d mouthShapeLeo
+
+            mouth_eye_vector_c[25] = eye_y_ratio
+            mouth_eye_vector_c[26] = eye_x_ratio
+
+            pose_vector_c[0] = x_angle
+            pose_vector_c[1] = y_angle
+            pose_vector_c[2] = z_angle
+
+        else:  # 动捕
             ret, frame = cap.read()
             input_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = facemesh.process(input_frame)
@@ -825,7 +1381,7 @@ def main():
 
             eye_l_h_temp = np_pose[0]
             eye_r_h_temp = np_pose[1]
-            mouth_ratio = np_pose[2]
+            mouth_ratio = mouthStatusLeo  # np_pose[2]
             eye_y_ratio = np_pose[3]
             eye_x_ratio = np_pose[4]
             x_angle = np_pose[5]
@@ -839,7 +1395,7 @@ def main():
             mouth_eye_vector_c[2] = eye_l_h_temp
             mouth_eye_vector_c[3] = eye_r_h_temp
 
-            mouth_eye_vector_c[14] = mouth_ratio * 1.5
+            mouth_eye_vector_c[mouthShapeLeo] = mouth_ratio * 1.5  # 1.5 # 14
 
             mouth_eye_vector_c[25] = eye_y_ratio
             mouth_eye_vector_c[26] = eye_x_ratio
@@ -974,6 +1530,45 @@ def main():
         if args.perf == 'main':
             print("output", (time.perf_counter() - tic) * 1000)
             tic = time.perf_counter()
+
+        # """★leojnjn 键盘监听
+        # 需要注意的是必须使用cv加载图像，只有点击图像窗口才能侦听点击窗口时所使用的按键
+        # ord和chr的用法我这里重复一下，可以实现对于acall码的解释，方便直接看到按键结果
+        # ord()函数主要用来返回对应字符的ascii码，
+        # chr()主要用来表示ascii码对应的字符，可以用十进制，也可以用十六进制。
+        # 说白了就是对键盘事件进行delay(50ms==0.1s)的等待（delay=0则为无限等待），若触发则返回该按键的ASSIC码（否则返回-1）
+        # """
+        # k = cv2.waitKey(100)  # & 0xFF
+        # # print(k)
+        # if k == -1:
+        #     # print("^_^")
+        #     mouthStatusLeo = 0
+        # else:  # k != -1
+        #     # print("^o^")
+        #     mouthStatusLeo = .7  # 根据不同角色嘴大小微调
+        #     if k == ord("a"):
+        #         # print("aaa")
+        #         mouthShapeLeo = 14
+        #     elif k == ord("e"):
+        #         # print("eee")
+        #         mouthShapeLeo = 17
+        #     elif k == ord("o"):
+        #         # print("ooo")
+        #         mouthShapeLeo = 18
+        #     elif k == ord("u"):
+        #         # print("uuu")
+        #         mouthShapeLeo = 16
+        #     elif k == ord("i"):
+        #         # print("iii")
+        #         mouthShapeLeo = 15
+        #     else:
+        #         # print("!!!")
+        #         mouthShapeLeo = 19
+        # """leojnjn20221208+
+        # # 创建声音到嘴型线程对象
+        # 为了保证子线程在主线程执行结束前优先结束，可以采取join方法，来保证子线程执行完后才会结束主线程。"""
+        # for t in threads:
+        #     t.join()
 
 
 if __name__ == '__main__':

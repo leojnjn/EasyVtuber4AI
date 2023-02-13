@@ -8,10 +8,11 @@ import sys
 
 default_arg = {
     'character': 'lambda_00',
+    'wave': 'wav_000_lex',  # leojnjn 给音频做输入框
+    'lip': 'lip_000_lex',  # leojnjn 给嘴型做输入框
     'input': 2,
     'output': 2,
     'ifm': None,
-    'osf': '127.0.0.1:11573',
     'is_extend_movement': False,
     'is_anime4k': False,
     'is_alpha_split': False,
@@ -39,6 +40,24 @@ for item in sorted(os.listdir(dirPath), key=lambda x: -os.path.getmtime(os.path.
     if '.png' == item[-4:]:
         characterList.append(item[:-4])
 
+"""leojnjn
+给音频做输入框"""
+wavPath = 'data/waves'
+waveList = []
+# 从小到大排序的文件
+for item_wave in sorted(os.listdir(wavPath), key=lambda x: -os.path.getmtime(os.path.join(wavPath, x))):
+    if '.wav' == item_wave[-4:]:  # 如果item_wave项的最后四个字符是.wav
+        waveList.append(item_wave[:-4])  # 则将倒数第四个字符前（不包括倒数第四个字符的）
+
+"""leojnjn
+给嘴型做输入框"""
+lipPath = 'data/lips'
+lipList = []
+# 从小到大排序的文件
+for item_lip in sorted(os.listdir(lipPath), key=lambda x: -os.path.getmtime(os.path.join(lipPath, x))):
+    if '.json' == item_lip[-5:]:  # 如果item_lip项的最后5个字符是.json
+        lipList.append(item_lip[:-5])  # 则将倒数第四个字符前（不包括倒数第四个字符的）
+
 root = tk.Tk()
 root.resizable(False, False)
 root.title('EasyVtuber Launcher')
@@ -52,10 +71,11 @@ def launch():
     global launch_btn
     args = {
         'character': character.get(),
+        'wave': wave.get(),  # leojnjn 给音频做输入框
+        'lip': lip.get(),  # leojnjn 给口型做输入框
         'input': input.get(),
         'output': output.get(),
         'ifm': ifm.get(),
-        'osf': osf.get(),
         'is_extend_movement': is_extend_movement.get(),
         'is_anime4k': is_anime4k.get(),
         'is_alpha_split': is_alpha_split.get(),
@@ -69,10 +89,6 @@ def launch():
     if args['input'] == 0:
         if len(args['ifm']) == 0:
             tkinter.messagebox.showinfo('EasyVtuber Launcher', 'Please Input iFacialMocap IP:Port')
-            return
-    if args['input'] == 4:
-        if len(args['osf']) == 0:
-            tkinter.messagebox.showinfo('EasyVtuber Launcher', 'Please Input OpenSeeFace IP:Port')
             return
 
     f = open('launcher.json', mode='w')
@@ -89,6 +105,17 @@ def launch():
             run_args.append('--character')
             run_args.append(args['character'])
 
+        """leojnjn
+        给音频做输入框"""
+        if len(args['wave']):
+            run_args.append('--wave')
+            run_args.append(args['wave'])
+        """leojnjn
+        给口型做输入框"""
+        if len(args['lip']):
+            run_args.append('--lip')
+            run_args.append(args['lip'])
+
         if args['input'] == 0:
             if len(args['ifm']):
                 run_args.append('--ifm')
@@ -102,9 +129,8 @@ def launch():
             run_args.append('--mouse_input')
             run_args.append('0,0,' + str(root.winfo_screenwidth()) + ',' + str(root.winfo_screenheight()))
         elif args['input'] == 4:
-            if len(args['osf']):
-                run_args.append('--osf')
-                run_args.append(args['osf'])
+            run_args.append('--AI_input')
+            run_args.append('0,0,' + str(root.winfo_screenwidth()) + ',' + str(root.winfo_screenheight()))
 
         if args['output'] == 0:
             run_args.append('--output_webcam')
@@ -164,49 +190,28 @@ ttk.Label(frameL, text="Character").pack(fill='x', expand=True)
 char_combo = ttk.Combobox(frameL, textvariable=character, value=characterList)
 char_combo.pack(fill='x', expand=True)
 
+wave = tk.StringVar(value=args['wave'])
+ttk.Label(frameL, text="Wave").pack(fill='x', expand=True)
+wav_combo = ttk.Combobox(frameL, textvariable=wave, values=waveList)
+wav_combo.pack(fill='x', expand=True)
 
+lip = tk.StringVar(value=args['lip'])
+ttk.Label(frameL, text="Lip").pack(fill='x', expand=True)
+lip_combo = ttk.Combobox(frameL, textvariable=lip, values=lipList)
+lip_combo.pack(fill='x', expand=True)
 
-def inputChange():
-    i=input.get()
-    if i==0:
-        ifmLbl.pack(fill='x', expand=True)
-        ifmEnt.pack(fill='x', expand=True)
-        osfLbl.pack_forget()
-        osfEnt.pack_forget()
-    elif i==4:
-        ifmLbl.pack_forget()
-        ifmEnt.pack_forget()
-        osfLbl.pack(fill='x', expand=True)
-        osfEnt.pack(fill='x', expand=True)
-    else:
-        ifmLbl.pack_forget()
-        ifmEnt.pack_forget()
-        osfLbl.pack_forget()
-        osfEnt.pack_forget()
-        frameLTxt.configure(height=0)
 input = tk.IntVar(value=args['input'])
 ttk.Label(frameL, text="Face Data Source").pack(fill='x', expand=True)
-ttk.Radiobutton(frameL, text='iFacialMocap', value=0, variable=input, command=inputChange).pack(fill='x', expand=True)
-ttk.Radiobutton(frameL, text='OpenSeeFace', value=4, variable=input, command=inputChange).pack(fill='x', expand=True)
-ttk.Radiobutton(frameL, text='Webcam(opencv)', value=1, variable=input, command=inputChange).pack(fill='x', expand=True)
-ttk.Radiobutton(frameL, text='Mouse Input', value=3, variable=input, command=inputChange).pack(fill='x', expand=True)
-ttk.Radiobutton(frameL, text='Initial Debug Input', value=2, variable=input, command=inputChange).pack(fill='x',
-                                                                                                       expand=True)
-frameLTxt = ttk.Frame(frameL)
-frameLTxt.pack(fill='x', expand=True)
-ifmLbl = ttk.Label(frameLTxt, text="iFacialMocap IP:Port")
-ifmLbl.pack(fill='x', expand=True)
+ttk.Radiobutton(frameL, text='iFacialMocap', value=0, variable=input).pack(fill='x', expand=True)
+ttk.Radiobutton(frameL, text='Webcam', value=1, variable=input).pack(fill='x', expand=True)
+ttk.Radiobutton(frameL, text='Mouse Input', value=3, variable=input).pack(fill='x', expand=True)
+ttk.Radiobutton(frameL, text='AI Input', value=4, variable=input).pack(fill='x', expand=True)
+ttk.Radiobutton(frameL, text='Initial Debug Input', value=2, variable=input).pack(fill='x', expand=True)
+
+ttk.Label(frameL, text="iFacialMocap IP:Port").pack(fill='x', expand=True)
 
 ifm = tk.StringVar(value=args['ifm'])
-ifmEnt = ttk.Entry(frameLTxt, textvariable=ifm, state=False)
-ifmEnt.pack(fill='x', expand=True)
-
-osfLbl = ttk.Label(frameLTxt, text="OpenSeeFace IP:Port")
-osfLbl.pack(fill='x', expand=True)
-osf = tk.StringVar(value=args['osf'])
-osfEnt = ttk.Entry(frameLTxt, textvariable=osf, state=False)
-osfEnt.pack(fill='x', expand=True)
-inputChange()
+ttk.Entry(frameL, textvariable=ifm, state=False).pack(fill='x', expand=True)
 
 ttk.Label(frameR, text="Model Simplify").pack(fill='x', expand=True)
 model_type = tk.IntVar(value=args['model_type'])

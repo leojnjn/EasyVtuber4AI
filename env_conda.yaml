@@ -1,4 +1,4 @@
-name: talking-head-anime-2-demo
+name: vits
 channels:
   - pytorch
   - conda-forge
@@ -89,7 +89,7 @@ dependencies:
   - pyqt=5.9.2=py38ha925a31_4
   - pyrsistent=0.17.3=py38h294d835_2
   - pysocks=1.7.1=py38haa95532_0
-  - python=3.8.5=h5fd99cc_1
+  - python=3.9.15
   - python-dateutil=2.8.1=pyhd3eb1b0_0
   - python_abi=3.8=1_cp38
   - pytorch=1.11.0=py3.8_cuda11.3_cudnn8_0
