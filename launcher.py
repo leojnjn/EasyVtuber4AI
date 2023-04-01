@@ -42,7 +42,7 @@ for item in sorted(os.listdir(dirPath), key=lambda x: -os.path.getmtime(os.path.
 
 """leojnjn
 给音频做输入框"""
-wavPath = 'data/waves'
+wavPath = 'Rhubarb-Lip-Sync-1.13.0-Windows/waves'
 waveList = []
 # 从小到大排序的文件
 for item_wave in sorted(os.listdir(wavPath), key=lambda x: -os.path.getmtime(os.path.join(wavPath, x))):
@@ -51,7 +51,7 @@ for item_wave in sorted(os.listdir(wavPath), key=lambda x: -os.path.getmtime(os.
 
 """leojnjn
 给嘴型做输入框"""
-lipPath = 'data/lips'
+lipPath = 'Rhubarb-Lip-Sync-1.13.0-Windows/lips'
 lipList = []
 # 从小到大排序的文件
 for item_lip in sorted(os.listdir(lipPath), key=lambda x: -os.path.getmtime(os.path.join(lipPath, x))):

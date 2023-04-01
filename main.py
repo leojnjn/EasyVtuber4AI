@@ -246,7 +246,7 @@ class AIClientProcess(Process):  # leojnjn20221229 创建AIClientProcess对象
         while True:
             pos = mouse.position
             # print(pos)
-            eye_limit = [0.8, 0.5]
+            eye_limit = [1.0, 0.7]
             head_eye_reduce = 0.6
             head_slowness = 0.2
             mouse_data = {
@@ -514,12 +514,14 @@ class Wav2MouthThread(Thread):  # class Wav2MouthProcess(Process):  #
         # waves_path = rf"data/waves/"  # rf"data/waves/{argsWave}.wav"
         # wave_name = os.listdir(waves_path)  # 得到waves_path文件夹下的所有文件名称
         # wave_path = waves_path + wave_name[5]  # 得到文件夹下音源路径 0 1 2 -> 14 3-> 22 4->98 5->99
-        wave_path = rf"data/waves/{args.wave}.wav"
+        # wave_path = rf"data/waves/{args.wave}.wav"
+        wave_path = rf"Rhubarb-Lip-Sync-1.13.0-Windows/waves/{args.wave}.wav"
 
         # lips_path = rf"data/lips/"
         # lip_name = os.listdir(lips_path)  # 得到lips_path文件夹下的所有文件名称
         # lip_path = lips_path + lip_name[5]  # 得到文件夹下口型json文件路径 0 1 2 -> 14 3-> 22 4->98 5->99
-        lip_path = rf"data/lips/{args.lip}.json"
+        # lip_path = rf"data/lips/{args.lip}.json"
+        lip_path = rf"Rhubarb-Lip-Sync-1.13.0-Windows/lips/{args.lip}.json"
 
         with open(lip_path, encoding='utf-8') as f:
             data = json.load(f)
@@ -570,8 +572,8 @@ class Wav2MouthThread(Thread):  # class Wav2MouthProcess(Process):  #
         #     except:
         #         print("Sorry sphinx can't record wave!")
 
-        print("等待20s启图像后")
-        time.sleep(20)  # 20用time.sleep模拟任务耗时
+        print("等待15s启图像后")
+        time.sleep(15)  # 20用time.sleep模拟任务耗时
         print("开始声音到张嘴o")
         """leojnjn
         读取本地音频波形数据,打开wave文件 file_name[0] = 'lex_000'  words: '您可以制定新的科研方向了司令官'"""
@@ -1131,7 +1133,10 @@ def main():
     timer 随机眨眼计时器"""
     mouthStatusLeo = 0
     mouthShapeLeo = 14
-    eyeStatusLeo, eyeStatusReo = 0, 0
+    eyeStatusLeo, eyeStatusReo = 0, 0  # 睁眼
+    last_blink_start = time.perf_counter()  # 眨眼
+    is_blinking = False  # 眨眼
+    r_t = random.uniform(5, 10)  # 眨眼
     tic_rands = 0.0
     dlt_rands = 0.0
 
@@ -1178,20 +1183,6 @@ def main():
             # print("!!!")
             mouthShapeLeo = 19
         # print(ret_phrase_queue[0])
-
-        """★leojnjn 随机眨眼的计时器部分 s 赋值mouse中的变量改变只影响mouse功能呈现
-        time.perf_counter()是已经持续的时间 (math.pi / 2.0 - 0.1)         # math.sin(time.perf_counter() * 2)"""
-        lower_case = int((math.pi / 2.0 - 0.05) * 1000)
-        # print(int((math.pi / 2.0 + 0.1) * 1000))
-        tic_rands = int(time.perf_counter() * 1000)
-        # print(tic_rands)
-        interval_milseconds = random.randint(0, 100)  # 1~60秒随机选一个时间
-        if (tic_rands % lower_case) < interval_milseconds:
-            if math.sin(time.perf_counter()) > 0:
-                eyeStatusReo, eyeStatusLeo = math.sin(time.perf_counter()), math.sin(time.perf_counter())
-        else:
-            eyeStatusReo, eyeStatusLeo = 0, 0  # 睁眼
-        # print(eyeStatusReo)
 
         """★leojnjn 键盘监听
         需要注意的是必须使用cv加载图像，只有点击图像窗口才能侦听点击窗口时所使用的按键
@@ -1329,8 +1320,47 @@ def main():
             except queue.Empty:
                 pass
 
+            """★leojnjn 随机眨眼的计时器部分 s 赋值mouse中的变量改变只影响mouse功能呈现
+            time.perf_counter()是已经持续的时间 (math.pi / 2.0 - 0.1)         # math.sin(time.perf_counter() * 2)"""
+
+            # lower_case = int((math.pi / 2.0 - 0.05) * 1000)
+            # # print(int((math.pi / 2.0 + 0.1) * 1000))
+            # tic_rands = int(time.perf_counter() * 1000)
+            # # print(tic_rands)
+            # interval_milseconds = random.randint(0, 100)  # 1~60秒随机选一个时间
+            # if (tic_rands % lower_case) < interval_milseconds:
+            #     if math.sin(time.perf_counter()) > 0:
+            #         eyeStatusReo, eyeStatusLeo = math.sin(time.perf_counter()), math.sin(time.perf_counter())
+            # else:
+            #     eyeStatusReo, eyeStatusLeo = 0, 0  # 睁眼
+            # # print(eyeStatusReo)
+            def blink_function(t_, ect):
+                # 1-sqrt(2e)/(sqrt(3)-1)*(t/ect)*exp(-(t/ect)^2)*sin(t/ect)
+                # ect = 1 / 6  # eye_closing_time
+                constant = math.sqrt(2 * math.e) / (math.sqrt(3) - 1)
+                return 1 - constant * (t_ / ect) * math.exp(-(t_ / ect) ** 2) * math.sin(t_ / ect)
+
+            time_since_blink = (time.perf_counter() - last_blink_start)
+            # print(time_since_blink)
+            if not is_blinking:
+                if time_since_blink > r_t:
+                    last_blink_start = time.perf_counter()
+                    time_since_blink = (time.perf_counter() - last_blink_start)
+                    is_blinking = True
+                    # print('start blinking')
+                    r_t = random.uniform(5, 8)
+                    # print(f'next blink in {r_t} seconds')
+            if is_blinking:
+                # print(time_since_blink)
+                eyeStatusLeo = blink_function(time_since_blink, 0.2)
+                eyeStatusReo = blink_function(time_since_blink, 0.2)
+                # print(eye_l_h_temp)
+            if is_blinking and time_since_blink > 0.2:
+                is_blinking = False
+                eyeStatusReo, eyeStatusLeo = 0, 0
             eye_l_h_temp = eyeStatusLeo  # mouse_data['eye_l_h_temp']# ★ 眼部状态 0 打开 1 关闭
             eye_r_h_temp = eyeStatusReo  # mouse_data['eye_r_h_temp']# ★ 眼部状态 0 打开 1 关闭
+
             mouth_ratio = mouthStatusLeo  # mouse_data['mouth_ratio']# ★ 嘴部状态 0 关闭 1 打开张嘴与否
             eye_y_ratio = mouse_data['eye_y_ratio']
             eye_x_ratio = mouse_data['eye_x_ratio']
